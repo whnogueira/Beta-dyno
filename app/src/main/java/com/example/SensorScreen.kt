@@ -47,6 +47,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -101,8 +102,14 @@ fun SensorScreen(
   var gyroY by remember { mutableFloatStateOf(0f) }
   var gyroZ by remember { mutableFloatStateOf(0f) }
 
+  var samplingFrequencyHz by remember { mutableDoubleStateOf(0.0) }
+
   DisposableEffect(sensorManager, accelerometerSensor, linearAccelerationSensor, gyroscopeSensor) {
     if (sensorManager != null) {
+      var previousTimestampNs = 0L
+      val validIntervals = mutableListOf<Double>()
+      var lastUiUpdateTimestampNs = 0L
+
       val listener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent?) {
           when (event?.sensor?.type) {
@@ -119,6 +126,31 @@ fun SensorScreen(
                 linearY = event.values[1]
                 linearZ = event.values[2]
               }
+
+              val currentTimestampNs = event.timestamp
+              if (previousTimestampNs != 0L) {
+                val deltaNs = currentTimestampNs - previousTimestampNs
+                // Ignora intervalos <= 0 e > 1 segundo (1_000_000_000 ns)
+                if (deltaNs > 0 && deltaNs <= 1_000_000_000L) {
+                  val intervaloSegundos = deltaNs / 1_000_000_000.0
+                  validIntervals.add(intervaloSegundos)
+                  if (validIntervals.size > 20) {
+                    validIntervals.removeAt(0)
+                  }
+
+                  val mediaDosIntervalos = validIntervals.average()
+                  if (mediaDosIntervalos > 0.0) {
+                    val frequenciaMedia = 1.0 / mediaDosIntervalos
+
+                    // Atualiza o texto visual no máximo cinco vezes por segundo (intervalo de 200 ms / 200_000_000 ns)
+                    if (currentTimestampNs - lastUiUpdateTimestampNs >= 200_000_000L) {
+                      samplingFrequencyHz = frequenciaMedia
+                      lastUiUpdateTimestampNs = currentTimestampNs
+                    }
+                  }
+                }
+              }
+              previousTimestampNs = currentTimestampNs
             }
             Sensor.TYPE_GYROSCOPE -> {
               if (event.values.size >= 3) {
@@ -275,12 +307,12 @@ fun SensorScreen(
           )
         )
 
-        // 5. AMOSTRAGEM (Fixo em zero)
+        // 5. AMOSTRAGEM (Frequência real de amostragem)
         SensorDataCard(
           title = "AMOSTRAGEM",
           icon = Icons.Outlined.Timer,
           items = listOf(
-            "Frequência" to "0.0 Hz"
+            "Frequência" to String.format(Locale.US, "%.1f Hz", samplingFrequencyHz)
           )
         )
 
