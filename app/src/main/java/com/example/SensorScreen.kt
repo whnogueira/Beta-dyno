@@ -16,6 +16,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Sensors
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -50,6 +52,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -116,6 +119,17 @@ fun SensorScreen(
   var gyroZ by remember { mutableFloatStateOf(0f) }
 
   var samplingFrequencyHz by remember { mutableDoubleStateOf(0.0) }
+
+  // SharedPreferences for Longitudinal Axis selection & Invert signal
+  val prefs = remember {
+    context.getSharedPreferences("dyno_prefs", Context.MODE_PRIVATE)
+  }
+  var selectedAxis by remember {
+    mutableStateOf(prefs.getString("longitudinal_axis", "Z") ?: "Z")
+  }
+  var isInverted by remember {
+    mutableStateOf(prefs.getBoolean("invert_signal", false))
+  }
 
   // GPS State
   var hasLocationPermission by remember {
@@ -431,6 +445,34 @@ fun SensorScreen(
           testTag = "linear_acceleration_card"
         )
 
+        // EIXO LONGITUDINAL
+        val rawLongitudinal = when (selectedAxis) {
+          "X" -> linearX
+          "Y" -> linearY
+          else -> linearZ
+        }
+        val longitudinalAcc = if (isInverted) -rawLongitudinal else rawLongitudinal
+        val direction = when {
+          longitudinalAcc > 0.15f -> "frente"
+          longitudinalAcc < -0.15f -> "trás"
+          else -> "parado"
+        }
+
+        LongitudinalAxisCard(
+          selectedAxis = selectedAxis,
+          onAxisSelected = { newAxis ->
+            selectedAxis = newAxis
+            prefs.edit().putString("longitudinal_axis", newAxis).apply()
+          },
+          isInverted = isInverted,
+          onInvertChanged = { newInvert ->
+            isInverted = newInvert
+            prefs.edit().putBoolean("invert_signal", newInvert).apply()
+          },
+          currentAcceleration = longitudinalAcc,
+          direction = direction
+        )
+
         // 3. GIROSCÓPIO (Real Sensor Readings)
         SensorCard(
           title = "GIROSCÓPIO",
@@ -611,6 +653,135 @@ private fun SensorValueRow(
       ),
       color = MaterialTheme.colorScheme.onSurface,
     )
+  }
+}
+
+@Composable
+private fun LongitudinalAxisCard(
+  selectedAxis: String,
+  onAxisSelected: (String) -> Unit,
+  isInverted: Boolean,
+  onInvertChanged: (Boolean) -> Unit,
+  currentAcceleration: Float,
+  direction: String,
+  modifier: Modifier = Modifier
+) {
+  Card(
+    modifier = modifier
+      .fillMaxWidth()
+      .testTag("longitudinal_axis_card"),
+    shape = RoundedCornerShape(18.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 20.dp, vertical = 16.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      // Card Header
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.Tune,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(20.dp)
+        )
+        Text(
+          text = "EIXO LONGITUDINAL",
+          style = MaterialTheme.typography.labelLarge.copy(
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.8.sp,
+            fontSize = 13.sp,
+          ),
+          color = MaterialTheme.colorScheme.primary,
+        )
+      }
+
+      HorizontalDivider(
+        thickness = 0.8.dp,
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+      )
+
+      // Axis Selector Buttons (X, Y, Z)
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        listOf("X", "Y", "Z").forEach { axis ->
+          val isSelected = axis == selectedAxis
+          Button(
+            onClick = { onAxisSelected(axis) },
+            modifier = Modifier
+              .weight(1f)
+              .height(42.dp)
+              .testTag("axis_btn_$axis"),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+              containerColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+              contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+            ),
+            border = if (isSelected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+            contentPadding = PaddingValues(0.dp)
+          ) {
+            Text(
+              text = axis,
+              style = MaterialTheme.typography.labelLarge.copy(
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                fontSize = 15.sp
+              )
+            )
+          }
+        }
+      }
+
+      // Invert Signal Option
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .clickable { onInvertChanged(!isInverted) }
+          .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Text(
+          text = "Inverter sinal",
+          style = MaterialTheme.typography.bodyMedium.copy(
+            fontWeight = FontWeight.Medium
+          ),
+          color = MaterialTheme.colorScheme.onSurface
+        )
+        Switch(
+          checked = isInverted,
+          onCheckedChange = onInvertChanged,
+          modifier = Modifier.testTag("invert_signal_switch")
+        )
+      }
+
+      HorizontalDivider(
+        thickness = 0.8.dp,
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+      )
+
+      // Display readings
+      Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        SensorValueRow(label = "Eixo selecionado", value = selectedAxis)
+        SensorValueRow(
+          label = "Aceleração",
+          value = String.format(Locale.US, "%.3f m/s²", currentAcceleration)
+        )
+        SensorValueRow(label = "Direção", value = direction)
+      }
+    }
   }
 }
 
