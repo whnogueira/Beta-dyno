@@ -71,6 +71,79 @@ fun SensorScreen(
 ) {
   BackHandler(onBack = onNavigateBack)
 
+  val context = LocalContext.current
+  val sensorManager = remember {
+    context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+  }
+  val accelerometerSensor = remember(sensorManager) {
+    sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+  }
+  val linearAccelerationSensor = remember(sensorManager) {
+    sensorManager?.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+  }
+
+  val isRawAvailable = accelerometerSensor != null
+  val isLinearAvailable = linearAccelerationSensor != null
+
+  var rawX by remember { mutableFloatStateOf(0f) }
+  var rawY by remember { mutableFloatStateOf(0f) }
+  var rawZ by remember { mutableFloatStateOf(0f) }
+
+  var linearX by remember { mutableFloatStateOf(0f) }
+  var linearY by remember { mutableFloatStateOf(0f) }
+  var linearZ by remember { mutableFloatStateOf(0f) }
+
+  DisposableEffect(sensorManager, accelerometerSensor, linearAccelerationSensor) {
+    if (sensorManager != null) {
+      val listener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent?) {
+          when (event?.sensor?.type) {
+            Sensor.TYPE_ACCELEROMETER -> {
+              if (event.values.size >= 3) {
+                rawX = event.values[0]
+                rawY = event.values[1]
+                rawZ = event.values[2]
+              }
+            }
+            Sensor.TYPE_LINEAR_ACCELERATION -> {
+              if (event.values.size >= 3) {
+                linearX = event.values[0]
+                linearY = event.values[1]
+                linearZ = event.values[2]
+              }
+            }
+          }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+          // No-op
+        }
+      }
+
+      if (accelerometerSensor != null) {
+        sensorManager.registerListener(
+          listener,
+          accelerometerSensor,
+          SensorManager.SENSOR_DELAY_GAME
+        )
+      }
+
+      if (linearAccelerationSensor != null) {
+        sensorManager.registerListener(
+          listener,
+          linearAccelerationSensor,
+          SensorManager.SENSOR_DELAY_GAME
+        )
+      }
+
+      onDispose {
+        sensorManager.unregisterListener(listener)
+      }
+    } else {
+      onDispose { }
+    }
+  }
+
   Scaffold(
     modifier = modifier.fillMaxSize().testTag("sensor_screen"),
     containerColor = MaterialTheme.colorScheme.background,
@@ -128,17 +201,31 @@ fun SensorScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
       ) {
         // 1. ACELERÔMETRO BRUTO (Real Sensor Readings)
-        RawAccelerometerCard()
+        SensorCard(
+          title = "ACELERÔMETRO BRUTO",
+          icon = Icons.Outlined.Sensors,
+          isAvailable = isRawAvailable,
+          unavailableMessage = stringResource(R.string.sensor_unavailable),
+          items = listOf(
+            "X" to String.format(Locale.US, "%.3f m/s²", rawX),
+            "Y" to String.format(Locale.US, "%.3f m/s²", rawY),
+            "Z" to String.format(Locale.US, "%.3f m/s²", rawZ)
+          ),
+          testTag = "raw_accelerometer_card"
+        )
 
-        // 2. ACELERAÇÃO LINEAR (Fixo em zero)
-        SensorDataCard(
+        // 2. ACELERAÇÃO LINEAR (Real Sensor Readings)
+        SensorCard(
           title = "ACELERAÇÃO LINEAR",
           icon = Icons.Outlined.Speed,
+          isAvailable = isLinearAvailable,
+          unavailableMessage = stringResource(R.string.linear_sensor_unavailable),
           items = listOf(
-            "X" to "0.000 m/s²",
-            "Y" to "0.000 m/s²",
-            "Z" to "0.000 m/s²"
-          )
+            "X" to String.format(Locale.US, "%.3f m/s²", linearX),
+            "Y" to String.format(Locale.US, "%.3f m/s²", linearY),
+            "Z" to String.format(Locale.US, "%.3f m/s²", linearZ)
+          ),
+          testTag = "linear_acceleration_card"
         )
 
         // 3. GIROSCÓPIO (Fixo em zero)
@@ -209,56 +296,19 @@ fun SensorScreen(
 }
 
 @Composable
-private fun RawAccelerometerCard(
-  modifier: Modifier = Modifier
+private fun SensorCard(
+  title: String,
+  icon: ImageVector,
+  isAvailable: Boolean,
+  unavailableMessage: String,
+  items: List<Pair<String, String>>,
+  modifier: Modifier = Modifier,
+  testTag: String = ""
 ) {
-  val context = LocalContext.current
-  val sensorManager = remember {
-    context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-  }
-  val accelerometerSensor = remember(sensorManager) {
-    sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-  }
-
-  var isAvailable by remember { mutableStateOf(accelerometerSensor != null) }
-  var rawX by remember { mutableFloatStateOf(0f) }
-  var rawY by remember { mutableFloatStateOf(0f) }
-  var rawZ by remember { mutableFloatStateOf(0f) }
-
-  DisposableEffect(sensorManager, accelerometerSensor) {
-    if (sensorManager != null && accelerometerSensor != null) {
-      isAvailable = true
-      val listener = object : SensorEventListener {
-        override fun onSensorChanged(event: SensorEvent?) {
-          if (event?.sensor?.type == Sensor.TYPE_ACCELEROMETER && event.values.size >= 3) {
-            rawX = event.values[0]
-            rawY = event.values[1]
-            rawZ = event.values[2]
-          }
-        }
-
-        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-          // No-op
-        }
-      }
-
-      sensorManager.registerListener(
-        listener,
-        accelerometerSensor,
-        SensorManager.SENSOR_DELAY_GAME
-      )
-
-      onDispose {
-        sensorManager.unregisterListener(listener)
-      }
-    } else {
-      isAvailable = false
-      onDispose { }
-    }
-  }
-
   Card(
-    modifier = modifier.fillMaxWidth().testTag("raw_accelerometer_card"),
+    modifier = modifier
+      .fillMaxWidth()
+      .then(if (testTag.isNotEmpty()) Modifier.testTag(testTag) else Modifier),
     shape = RoundedCornerShape(18.dp),
     colors = CardDefaults.cardColors(
       containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
@@ -277,13 +327,13 @@ private fun RawAccelerometerCard(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         Icon(
-          imageVector = Icons.Outlined.Sensors,
+          imageVector = icon,
           contentDescription = null,
           tint = MaterialTheme.colorScheme.primary,
           modifier = Modifier.size(20.dp)
         )
         Text(
-          text = "ACELERÔMETRO BRUTO",
+          text = title,
           style = MaterialTheme.typography.labelLarge.copy(
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.8.sp,
@@ -300,7 +350,7 @@ private fun RawAccelerometerCard(
 
       if (!isAvailable) {
         Text(
-          text = "Acelerômetro indisponível",
+          text = unavailableMessage,
           style = MaterialTheme.typography.bodyMedium.copy(
             fontWeight = FontWeight.Medium
           ),
@@ -311,9 +361,9 @@ private fun RawAccelerometerCard(
         Column(
           verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-          SensorValueRow(label = "X", value = String.format(Locale.US, "%.3f m/s²", rawX))
-          SensorValueRow(label = "Y", value = String.format(Locale.US, "%.3f m/s²", rawY))
-          SensorValueRow(label = "Z", value = String.format(Locale.US, "%.3f m/s²", rawZ))
+          items.forEach { (label, value) ->
+            SensorValueRow(label = label, value = value)
+          }
         }
       }
     }
