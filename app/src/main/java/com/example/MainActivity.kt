@@ -57,6 +57,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,13 +71,27 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.DynoLiteTheme
 
+enum class AppScreen {
+  HOME,
+  SENSORS
+}
+
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
     setContent {
       DynoLiteTheme {
-        DynoLiteHomeScreen()
+        var currentScreen by remember { mutableStateOf(AppScreen.HOME) }
+
+        when (currentScreen) {
+          AppScreen.HOME -> DynoLiteHomeScreen(
+            onNavigateToSensors = { currentScreen = AppScreen.SENSORS }
+          )
+          AppScreen.SENSORS -> SensorScreen(
+            onNavigateBack = { currentScreen = AppScreen.HOME }
+          )
+        }
       }
     }
   }
@@ -84,7 +99,10 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DynoLiteHomeScreen(modifier: Modifier = Modifier) {
+fun DynoLiteHomeScreen(
+  onNavigateToSensors: () -> Unit = {},
+  modifier: Modifier = Modifier
+) {
   var selectedTab by remember { mutableIntStateOf(0) }
 
   Scaffold(
@@ -362,7 +380,7 @@ fun DynoLiteHomeScreen(modifier: Modifier = Modifier) {
 
           // 2. TESTAR SENSORES (Tonal light blue pill button)
           FilledTonalButton(
-            onClick = { /* Primeira etapa: sem ação */ },
+            onClick = onNavigateToSensors,
             modifier = Modifier
               .fillMaxWidth()
               .height(56.dp)
