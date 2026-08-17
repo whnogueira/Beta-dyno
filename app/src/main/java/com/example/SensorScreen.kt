@@ -64,6 +64,7 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,6 +77,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
+import kotlin.math.abs
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -120,7 +124,9 @@ fun SensorScreen(
 
   var samplingFrequencyHz by remember { mutableDoubleStateOf(0.0) }
 
-  // SharedPreferences for Longitudinal Axis selection & Invert signal
+  val scope = rememberCoroutineScope()
+
+  // SharedPreferences for Longitudinal Axis selection, Invert signal & Calibration Offsets
   val prefs = remember {
     context.getSharedPreferences("dyno_prefs", Context.MODE_PRIVATE)
   }
@@ -129,6 +135,33 @@ fun SensorScreen(
   }
   var isInverted by remember {
     mutableStateOf(prefs.getBoolean("invert_signal", false))
+  }
+
+  // Calibration Offsets & State
+  var offsetX by remember { mutableFloatStateOf(prefs.getFloat("offset_x", 0f)) }
+  var offsetY by remember { mutableFloatStateOf(prefs.getFloat("offset_y", 0f)) }
+  var offsetZ by remember { mutableFloatStateOf(prefs.getFloat("offset_z", 0f)) }
+  val isCalibratedInitially = remember { prefs.getBoolean("is_calibrated", false) }
+
+  var isCalibrating by remember { mutableStateOf(false) }
+  var calibrationStatus by remember {
+    mutableStateOf(if (isCalibratedInitially) "Calibração concluída" else "Não calibrado")
+  }
+
+  val calibrationCollector = remember {
+    object {
+      var isCollecting = false
+      val samplesX = mutableListOf<Float>()
+      val samplesY = mutableListOf<Float>()
+      val samplesZ = mutableListOf<Float>()
+
+      fun reset() {
+        isCollecting = false
+        samplesX.clear()
+        samplesY.clear()
+        samplesZ.clear()
+      }
+    }
   }
 
   // GPS State
@@ -197,6 +230,59 @@ fun SensorScreen(
                 linearX = event.values[0]
                 linearY = event.values[1]
                 linearZ = event.values[2]
+              }
+
+              if (calibrationCollector.isCollecting && event.values.size >= 3) {
+                val curX = event.values[0]
+                val curY = event.values[1]
+                val curZ = event.values[2]
+
+                var movedExcessively = false
+                if (calibrationCollector.samplesX.isNotEmpty()) {
+                  val avgX = calibrationCollector.samplesX.average().toFloat()
+                  val avgY = calibrationCollector.samplesY.average().toFloat()
+                  val avgZ = calibrationCollector.samplesZ.average().toFloat()
+
+                  if (abs(curX - avgX) > 0.8f ||
+                      abs(curY - avgY) > 0.8f ||
+                      abs(curZ - avgZ) > 0.8f) {
+                    movedExcessively = true
+                  }
+                }
+
+                if (movedExcessively) {
+                  calibrationCollector.reset()
+                  isCalibrating = false
+                  calibrationStatus = "Calibração cancelada: aparelho se moveu"
+                } else {
+                  calibrationCollector.samplesX.add(curX)
+                  calibrationCollector.samplesY.add(curY)
+                  calibrationCollector.samplesZ.add(curZ)
+
+                  val count = calibrationCollector.samplesX.size
+                  calibrationStatus = "Calibrando $count%"
+
+                  if (count >= 100) {
+                    val newOffsetX = calibrationCollector.samplesX.average().toFloat()
+                    val newOffsetY = calibrationCollector.samplesY.average().toFloat()
+                    val newOffsetZ = calibrationCollector.samplesZ.average().toFloat()
+
+                    offsetX = newOffsetX
+                    offsetY = newOffsetY
+                    offsetZ = newOffsetZ
+
+                    prefs.edit()
+                      .putFloat("offset_x", newOffsetX)
+                      .putFloat("offset_y", newOffsetY)
+                      .putFloat("offset_z", newOffsetZ)
+                      .putBoolean("is_calibrated", true)
+                      .apply()
+
+                    calibrationStatus = "Calibração concluída"
+                    isCalibrating = false
+                    calibrationCollector.reset()
+                  }
+                }
               }
 
               val currentTimestampNs = event.timestamp
@@ -447,9 +533,14 @@ fun SensorScreen(
 
         // EIXO LONGITUDINAL
         val rawLongitudinal = when (selectedAxis) {
-          "X" -> linearX
-          "Y" -> linearY
-          else -> linearZ
+          "X" -> linearX - offsetX
+          "Y" -> linearY - offsetY
+          else -> linearZ - offsetZ
+        }
+        val appliedOffset = when (selectedAxis) {
+          "X" -> offsetX
+          "Y" -> offsetY
+          else -> offsetZ
         }
         val longitudinalAcc = if (isInverted) -rawLongitudinal else rawLongitudinal
         val direction = when {
@@ -469,8 +560,22 @@ fun SensorScreen(
             isInverted = newInvert
             prefs.edit().putBoolean("invert_signal", newInvert).apply()
           },
+          appliedOffset = appliedOffset,
           currentAcceleration = longitudinalAcc,
-          direction = direction
+          direction = direction,
+          calibrationStatus = calibrationStatus,
+          isCalibrating = isCalibrating,
+          onCalibrateClicked = {
+            scope.launch {
+              isCalibrating = true
+              calibrationStatus = "Mantenha o aparelho parado..."
+              calibrationCollector.reset()
+              delay(500)
+              if (isCalibrating) {
+                calibrationCollector.isCollecting = true
+              }
+            }
+          }
         )
 
         // 3. GIROSCÓPIO (Real Sensor Readings)
@@ -662,8 +767,12 @@ private fun LongitudinalAxisCard(
   onAxisSelected: (String) -> Unit,
   isInverted: Boolean,
   onInvertChanged: (Boolean) -> Unit,
+  appliedOffset: Float,
   currentAcceleration: Float,
   direction: String,
+  calibrationStatus: String,
+  isCalibrating: Boolean,
+  onCalibrateClicked: () -> Unit,
   modifier: Modifier = Modifier
 ) {
   Card(
@@ -719,6 +828,7 @@ private fun LongitudinalAxisCard(
           val isSelected = axis == selectedAxis
           Button(
             onClick = { onAxisSelected(axis) },
+            enabled = !isCalibrating,
             modifier = Modifier
               .weight(1f)
               .height(42.dp)
@@ -727,6 +837,8 @@ private fun LongitudinalAxisCard(
             colors = ButtonDefaults.buttonColors(
               containerColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
               contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+              disabledContainerColor = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+              disabledContentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
             ),
             border = if (isSelected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
             contentPadding = PaddingValues(0.dp)
@@ -746,7 +858,7 @@ private fun LongitudinalAxisCard(
       Row(
         modifier = Modifier
           .fillMaxWidth()
-          .clickable { onInvertChanged(!isInverted) }
+          .clickable(enabled = !isCalibrating) { onInvertChanged(!isInverted) }
           .padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -756,11 +868,12 @@ private fun LongitudinalAxisCard(
           style = MaterialTheme.typography.bodyMedium.copy(
             fontWeight = FontWeight.Medium
           ),
-          color = MaterialTheme.colorScheme.onSurface
+          color = if (isCalibrating) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurface
         )
         Switch(
           checked = isInverted,
           onCheckedChange = onInvertChanged,
+          enabled = !isCalibrating,
           modifier = Modifier.testTag("invert_signal_switch")
         )
       }
@@ -776,10 +889,63 @@ private fun LongitudinalAxisCard(
       ) {
         SensorValueRow(label = "Eixo selecionado", value = selectedAxis)
         SensorValueRow(
+          label = "Offset aplicado",
+          value = String.format(Locale.US, "%.3f m/s²", appliedOffset)
+        )
+        SensorValueRow(
           label = "Aceleração",
           value = String.format(Locale.US, "%.3f m/s²", currentAcceleration)
         )
         SensorValueRow(label = "Direção", value = direction)
+      }
+
+      HorizontalDivider(
+        thickness = 0.8.dp,
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+      )
+
+      // Calibration Section
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        Text(
+          text = calibrationStatus,
+          style = MaterialTheme.typography.bodyMedium.copy(
+            fontWeight = FontWeight.Medium,
+            fontSize = 13.sp
+          ),
+          color = when {
+            calibrationStatus.contains("cancelada") -> MaterialTheme.colorScheme.error
+            calibrationStatus.contains("concluída") -> MaterialTheme.colorScheme.primary
+            calibrationStatus.contains("Calibrando") || calibrationStatus.contains("parado") -> MaterialTheme.colorScheme.tertiary
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+          }
+        )
+
+        Button(
+          onClick = onCalibrateClicked,
+          enabled = !isCalibrating,
+          modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .testTag("btn_calibrate_zero"),
+          shape = RoundedCornerShape(12.dp),
+          colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+          )
+        ) {
+          Text(
+            text = stringResource(R.string.btn_calibrate_zero),
+            style = MaterialTheme.typography.labelLarge.copy(
+              fontWeight = FontWeight.Bold,
+              letterSpacing = 0.5.sp
+            )
+          )
+        }
       }
     }
   }
