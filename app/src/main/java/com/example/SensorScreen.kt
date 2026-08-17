@@ -1,5 +1,10 @@
 package com.example
 
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -40,15 +45,23 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -114,18 +127,10 @@ fun SensorScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp),
       ) {
-        // 1. ACELERÔMETRO BRUTO
-        SensorDataCard(
-          title = "ACELERÔMETRO BRUTO",
-          icon = Icons.Outlined.Sensors,
-          items = listOf(
-            "X" to "0.000 m/s²",
-            "Y" to "0.000 m/s²",
-            "Z" to "0.000 m/s²"
-          )
-        )
+        // 1. ACELERÔMETRO BRUTO (Real Sensor Readings)
+        RawAccelerometerCard()
 
-        // 2. ACELERAÇÃO LINEAR
+        // 2. ACELERAÇÃO LINEAR (Fixo em zero)
         SensorDataCard(
           title = "ACELERAÇÃO LINEAR",
           icon = Icons.Outlined.Speed,
@@ -136,7 +141,7 @@ fun SensorScreen(
           )
         )
 
-        // 3. GIROSCÓPIO
+        // 3. GIROSCÓPIO (Fixo em zero)
         SensorDataCard(
           title = "GIROSCÓPIO",
           icon = Icons.Outlined.Explore,
@@ -147,7 +152,7 @@ fun SensorScreen(
           )
         )
 
-        // 4. GPS
+        // 4. GPS (Fixo em zero / indisponível)
         SensorDataCard(
           title = "GPS",
           icon = Icons.Outlined.LocationOn,
@@ -157,7 +162,7 @@ fun SensorScreen(
           )
         )
 
-        // 5. AMOSTRAGEM
+        // 5. AMOSTRAGEM (Fixo em zero)
         SensorDataCard(
           title = "AMOSTRAGEM",
           icon = Icons.Outlined.Timer,
@@ -200,6 +205,147 @@ fun SensorScreen(
         Spacer(modifier = Modifier.height(16.dp))
       }
     }
+  }
+}
+
+@Composable
+private fun RawAccelerometerCard(
+  modifier: Modifier = Modifier
+) {
+  val context = LocalContext.current
+  val sensorManager = remember {
+    context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+  }
+  val accelerometerSensor = remember(sensorManager) {
+    sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+  }
+
+  var isAvailable by remember { mutableStateOf(accelerometerSensor != null) }
+  var rawX by remember { mutableFloatStateOf(0f) }
+  var rawY by remember { mutableFloatStateOf(0f) }
+  var rawZ by remember { mutableFloatStateOf(0f) }
+
+  DisposableEffect(sensorManager, accelerometerSensor) {
+    if (sensorManager != null && accelerometerSensor != null) {
+      isAvailable = true
+      val listener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent?) {
+          if (event?.sensor?.type == Sensor.TYPE_ACCELEROMETER && event.values.size >= 3) {
+            rawX = event.values[0]
+            rawY = event.values[1]
+            rawZ = event.values[2]
+          }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+          // No-op
+        }
+      }
+
+      sensorManager.registerListener(
+        listener,
+        accelerometerSensor,
+        SensorManager.SENSOR_DELAY_GAME
+      )
+
+      onDispose {
+        sensorManager.unregisterListener(listener)
+      }
+    } else {
+      isAvailable = false
+      onDispose { }
+    }
+  }
+
+  Card(
+    modifier = modifier.fillMaxWidth().testTag("raw_accelerometer_card"),
+    shape = RoundedCornerShape(18.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 20.dp, vertical = 16.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      // Card Header
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.Sensors,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(20.dp)
+        )
+        Text(
+          text = "ACELERÔMETRO BRUTO",
+          style = MaterialTheme.typography.labelLarge.copy(
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.8.sp,
+            fontSize = 13.sp,
+          ),
+          color = MaterialTheme.colorScheme.primary,
+        )
+      }
+
+      HorizontalDivider(
+        thickness = 0.8.dp,
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+      )
+
+      if (!isAvailable) {
+        Text(
+          text = "Acelerômetro indisponível",
+          style = MaterialTheme.typography.bodyMedium.copy(
+            fontWeight = FontWeight.Medium
+          ),
+          color = MaterialTheme.colorScheme.error,
+          modifier = Modifier.padding(vertical = 4.dp)
+        )
+      } else {
+        Column(
+          verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          SensorValueRow(label = "X", value = String.format(Locale.US, "%.3f m/s²", rawX))
+          SensorValueRow(label = "Y", value = String.format(Locale.US, "%.3f m/s²", rawY))
+          SensorValueRow(label = "Z", value = String.format(Locale.US, "%.3f m/s²", rawZ))
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun SensorValueRow(
+  label: String,
+  value: String,
+  modifier: Modifier = Modifier
+) {
+  Row(
+    modifier = modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text = if (label.length == 1) "$label:" else "$label:",
+      style = MaterialTheme.typography.bodyMedium.copy(
+        fontWeight = FontWeight.Medium
+      ),
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+      text = value,
+      style = MaterialTheme.typography.bodyMedium.copy(
+        fontWeight = FontWeight.SemiBold,
+        fontFamily = FontFamily.Monospace,
+      ),
+      color = MaterialTheme.colorScheme.onSurface,
+    )
   }
 }
 
@@ -256,29 +402,10 @@ private fun SensorDataCard(
         verticalArrangement = Arrangement.spacedBy(8.dp)
       ) {
         items.forEach { (label, value) ->
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Text(
-              text = if (label.length == 1) "$label:" else "$label:",
-              style = MaterialTheme.typography.bodyMedium.copy(
-                fontWeight = FontWeight.Medium
-              ),
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-              text = value,
-              style = MaterialTheme.typography.bodyMedium.copy(
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = FontFamily.Monospace,
-              ),
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-          }
+          SensorValueRow(label = label, value = value)
         }
       }
     }
   }
 }
+
