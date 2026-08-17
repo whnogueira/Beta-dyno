@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">Dyno Lite</string>
     <string name="prototype_subtitle">Protótipo de sensores</string>
-    <string name="version_label">0.4.0</string>
+    <string name="version_label">0.5.0</string>
     <string name="btn_test_sensors">Testar sensores</string>
     <string name="btn_settings">Configuração</string>
     <string name="btn_start_test">Iniciar teste</string>
@@ -14,4 +14,5 @@
     <string name="section_sampling">AMOSTRAGEM</string>
     <string name="sensor_unavailable">Acelerômetro indisponível</string>
     <string name="linear_sensor_unavailable">Aceleração linear indisponível</string>
+    <string name="gyro_sensor_unavailable">indisponível</string>
 </resources>

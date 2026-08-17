@@ -81,9 +81,13 @@ fun SensorScreen(
   val linearAccelerationSensor = remember(sensorManager) {
     sensorManager?.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
   }
+  val gyroscopeSensor = remember(sensorManager) {
+    sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+  }
 
   val isRawAvailable = accelerometerSensor != null
   val isLinearAvailable = linearAccelerationSensor != null
+  val isGyroAvailable = gyroscopeSensor != null
 
   var rawX by remember { mutableFloatStateOf(0f) }
   var rawY by remember { mutableFloatStateOf(0f) }
@@ -93,7 +97,11 @@ fun SensorScreen(
   var linearY by remember { mutableFloatStateOf(0f) }
   var linearZ by remember { mutableFloatStateOf(0f) }
 
-  DisposableEffect(sensorManager, accelerometerSensor, linearAccelerationSensor) {
+  var gyroX by remember { mutableFloatStateOf(0f) }
+  var gyroY by remember { mutableFloatStateOf(0f) }
+  var gyroZ by remember { mutableFloatStateOf(0f) }
+
+  DisposableEffect(sensorManager, accelerometerSensor, linearAccelerationSensor, gyroscopeSensor) {
     if (sensorManager != null) {
       val listener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent?) {
@@ -110,6 +118,13 @@ fun SensorScreen(
                 linearX = event.values[0]
                 linearY = event.values[1]
                 linearZ = event.values[2]
+              }
+            }
+            Sensor.TYPE_GYROSCOPE -> {
+              if (event.values.size >= 3) {
+                gyroX = event.values[0]
+                gyroY = event.values[1]
+                gyroZ = event.values[2]
               }
             }
           }
@@ -132,6 +147,14 @@ fun SensorScreen(
         sensorManager.registerListener(
           listener,
           linearAccelerationSensor,
+          SensorManager.SENSOR_DELAY_GAME
+        )
+      }
+
+      if (gyroscopeSensor != null) {
+        sensorManager.registerListener(
+          listener,
+          gyroscopeSensor,
           SensorManager.SENSOR_DELAY_GAME
         )
       }
@@ -228,15 +251,18 @@ fun SensorScreen(
           testTag = "linear_acceleration_card"
         )
 
-        // 3. GIROSCÓPIO (Fixo em zero)
-        SensorDataCard(
+        // 3. GIROSCÓPIO (Real Sensor Readings)
+        SensorCard(
           title = "GIROSCÓPIO",
           icon = Icons.Outlined.Explore,
+          isAvailable = isGyroAvailable,
+          unavailableMessage = stringResource(R.string.gyro_sensor_unavailable),
           items = listOf(
-            "X" to "0.000 rad/s",
-            "Y" to "0.000 rad/s",
-            "Z" to "0.000 rad/s"
-          )
+            "X" to String.format(Locale.US, "%.3f rad/s", gyroX),
+            "Y" to String.format(Locale.US, "%.3f rad/s", gyroY),
+            "Z" to String.format(Locale.US, "%.3f rad/s", gyroZ)
+          ),
+          testTag = "gyroscope_card"
         )
 
         // 4. GPS (Fixo em zero / indisponível)
