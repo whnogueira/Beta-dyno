@@ -1,11 +1,20 @@
 package com.example
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Bundle
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,6 +55,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -76,6 +86,9 @@ fun SensorScreen(
   val sensorManager = remember {
     context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
   }
+  val locationManager = remember {
+    context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+  }
   val accelerometerSensor = remember(sensorManager) {
     sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
   }
@@ -103,6 +116,51 @@ fun SensorScreen(
   var gyroZ by remember { mutableFloatStateOf(0f) }
 
   var samplingFrequencyHz by remember { mutableDoubleStateOf(0.0) }
+
+  // GPS State
+  var hasLocationPermission by remember {
+    mutableStateOf(
+      ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_FINE_LOCATION
+      ) == PackageManager.PERMISSION_GRANTED ||
+      ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+      ) == PackageManager.PERMISSION_GRANTED
+    )
+  }
+  var isPermissionDenied by remember { mutableStateOf(false) }
+  var isGpsDisabled by remember { mutableStateOf(false) }
+  var hasReceivedLocation by remember { mutableStateOf(false) }
+  var gpsSpeedKmh by remember { mutableFloatStateOf(0f) }
+  var gpsAccuracyMeters by remember { mutableFloatStateOf(0f) }
+  var hasAccuracy by remember { mutableStateOf(false) }
+
+  val permissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestMultiplePermissions()
+  ) { permissions ->
+    val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
+    val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+    if (fineGranted || coarseGranted) {
+      hasLocationPermission = true
+      isPermissionDenied = false
+    } else {
+      hasLocationPermission = false
+      isPermissionDenied = true
+    }
+  }
+
+  LaunchedEffect(Unit) {
+    if (!hasLocationPermission) {
+      permissionLauncher.launch(
+        arrayOf(
+          Manifest.permission.ACCESS_FINE_LOCATION,
+          Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+      )
+    }
+  }
 
   DisposableEffect(sensorManager, accelerometerSensor, linearAccelerationSensor, gyroscopeSensor) {
     if (sensorManager != null) {
@@ -193,6 +251,96 @@ fun SensorScreen(
 
       onDispose {
         sensorManager.unregisterListener(listener)
+      }
+    } else {
+      onDispose { }
+    }
+  }
+
+  // Location Listener Registration
+  DisposableEffect(hasLocationPermission, locationManager) {
+    if (hasLocationPermission && locationManager != null) {
+      val isFineGranted = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_FINE_LOCATION
+      ) == PackageManager.PERMISSION_GRANTED
+      val isCoarseGranted = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+      ) == PackageManager.PERMISSION_GRANTED
+
+      if (isFineGranted || isCoarseGranted) {
+        val isGpsEnabled = try {
+          locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+        } catch (_: Exception) {
+          false
+        }
+
+        if (!isGpsEnabled) {
+          isGpsDisabled = true
+        }
+
+        val locationListener = object : LocationListener {
+          override fun onLocationChanged(location: Location) {
+            hasReceivedLocation = true
+            isGpsDisabled = false
+            if (location.hasSpeed()) {
+              gpsSpeedKmh = maxOf(0f, location.speed * 3.6f)
+            } else {
+              gpsSpeedKmh = 0f
+            }
+            if (location.hasAccuracy()) {
+              hasAccuracy = true
+              gpsAccuracyMeters = location.accuracy
+            } else {
+              hasAccuracy = false
+            }
+          }
+
+          override fun onProviderEnabled(provider: String) {
+            if (provider == LocationManager.GPS_PROVIDER) {
+              isGpsDisabled = false
+            }
+          }
+
+          override fun onProviderDisabled(provider: String) {
+            if (provider == LocationManager.GPS_PROVIDER) {
+              isGpsDisabled = true
+            }
+          }
+
+          @Deprecated("Deprecated in Java")
+          override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+        }
+
+        try {
+          if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            locationManager.requestLocationUpdates(
+              LocationManager.GPS_PROVIDER,
+              500L,
+              0f,
+              locationListener
+            )
+          } else if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+            locationManager.requestLocationUpdates(
+              LocationManager.NETWORK_PROVIDER,
+              500L,
+              0f,
+              locationListener
+            )
+          }
+        } catch (_: SecurityException) {
+          isPermissionDenied = true
+        }
+
+        onDispose {
+          try {
+            locationManager.removeUpdates(locationListener)
+          } catch (_: SecurityException) {
+          }
+        }
+      } else {
+        onDispose { }
       }
     } else {
       onDispose { }
@@ -297,13 +445,22 @@ fun SensorScreen(
           testTag = "gyroscope_card"
         )
 
-        // 4. GPS (Fixo em zero / indisponível)
+        // 4. GPS (Leitura real de velocidade e precisão)
+        val precisionDisplay = when {
+          isPermissionDenied -> stringResource(R.string.gps_permission_denied)
+          isGpsDisabled -> stringResource(R.string.gps_disabled)
+          !hasReceivedLocation -> stringResource(R.string.gps_waiting)
+          hasAccuracy -> String.format(Locale.US, "%.1f m", gpsAccuracyMeters)
+          else -> "indisponível"
+        }
+        val speedDisplay = String.format(Locale.US, "%.1f km/h", gpsSpeedKmh)
+
         SensorDataCard(
           title = "GPS",
           icon = Icons.Outlined.LocationOn,
           items = listOf(
-            "Velocidade" to "0.0 km/h",
-            "Precisão" to "indisponível"
+            "Velocidade" to speedDisplay,
+            "Precisão" to precisionDisplay
           )
         )
 
